@@ -79,7 +79,7 @@ sys.modules.setdefault("astrbot.api.star", star_module)
 
 from astrbot_plugin_sub2api_status.claim import At as ClaimAt  # noqa: E402
 from astrbot_plugin_sub2api_status.claim import Plain as ClaimPlain  # noqa: E402
-from astrbot_plugin_sub2api_status.client import ChannelSnapshot  # noqa: E402
+from astrbot_plugin_sub2api_status.client import BindingServiceError, ChannelSnapshot  # noqa: E402
 from astrbot_plugin_sub2api_status.main import Main  # noqa: E402
 
 
@@ -213,14 +213,22 @@ async def test_claim_credits_once_and_stops_group_event(tmp_path, monkeypatch) -
         "gift_allowed_group_ids": "group-1",
         "binding_service_url": "http://binding.test",
         "QQ_BINDING_SERVICE_KEY": "binding-test-key",
+        "QQ_CLAIM_SERVICE_KEY": "claim-test-key",
         "claim_db_path": str(tmp_path / "claims.sqlite3"),
     }
     plugin = Main(object(), config)
     client = SimpleNamespace(
         add_balance=AsyncMock(),
     )
+    reservation = SimpleNamespace(
+        claim={"id": 1, "sub2api_user_id": 42, "amount": "10.00000000", "idempotency_key": "claim-stable"},
+        can_attempt=True,
+        notes="QQ群活动赠送余额",
+    )
+    existing = SimpleNamespace(claim=reservation.claim, can_attempt=False, notes=reservation.notes)
     binding_client = SimpleNamespace(
-        lookup=AsyncMock(return_value=SimpleNamespace(id=42)),
+        reserve_claim=AsyncMock(side_effect=[reservation, existing]),
+        complete_claim=AsyncMock(),
     )
     monkeypatch.setattr(plugin, "_client", lambda: client)
     monkeypatch.setattr(plugin, "_binding_client", lambda: binding_client)
@@ -247,6 +255,7 @@ async def test_binding_link_is_sent_to_private_session(monkeypatch) -> None:
     config = {
         "binding_service_url": "http://binding.test",
         "QQ_BINDING_SERVICE_KEY": "binding-test-key",
+        "QQ_CLAIM_SERVICE_KEY": "claim-test-key",
     }
     send_message = AsyncMock()
     plugin = Main(SimpleNamespace(send_message=send_message), config)
@@ -299,16 +308,19 @@ async def test_claim_requires_a_binding(monkeypatch, tmp_path) -> None:
         "gift_allowed_group_ids": "group-1",
         "binding_service_url": "http://binding.test",
         "QQ_BINDING_SERVICE_KEY": "binding-test-key",
+        "QQ_CLAIM_SERVICE_KEY": "claim-test-key",
         "claim_db_path": str(tmp_path / "claims.sqlite3"),
     }
     plugin = Main(object(), config)
-    binding_client = SimpleNamespace(lookup=AsyncMock(return_value=None))
+    binding_client = SimpleNamespace(
+        reserve_claim=AsyncMock(side_effect=BindingServiceError("not bound", "QQ_NOT_BOUND")),
+    )
     monkeypatch.setattr(plugin, "_binding_client", lambda: binding_client)
 
     results = [result async for result in plugin.claim_balance(ClaimEvent())]
 
     assert "尚未绑定" in results[0][1]
-    binding_client.lookup.assert_awaited_once_with("qq-1")
+    binding_client.reserve_claim.assert_awaited_once_with("qq-1", "group-1", "claim-test-key")
 
 
 async def test_claim_rejects_account_outside_registration_window(
@@ -323,17 +335,13 @@ async def test_claim_rejects_account_outside_registration_window(
         "claim_registration_window_hours": 24,
         "binding_service_url": "http://binding.test",
         "QQ_BINDING_SERVICE_KEY": "binding-test-key",
+        "QQ_CLAIM_SERVICE_KEY": "claim-test-key",
         "claim_db_path": str(tmp_path / "claims.sqlite3"),
     }
     plugin = Main(object(), config)
-    client = SimpleNamespace(
-        add_balance=AsyncMock(),
-        fetch_user_created_at=AsyncMock(
-            return_value=datetime.now(timezone.utc) - timedelta(hours=25)
-        ),
-    )
+    client = SimpleNamespace(add_balance=AsyncMock())
     binding_client = SimpleNamespace(
-        lookup=AsyncMock(return_value=SimpleNamespace(id=42)),
+        reserve_claim=AsyncMock(side_effect=BindingServiceError("expired", "REGISTRATION_WINDOW_EXPIRED")),
     )
     monkeypatch.setattr(plugin, "_client", lambda: client)
     monkeypatch.setattr(plugin, "_binding_client", lambda: binding_client)

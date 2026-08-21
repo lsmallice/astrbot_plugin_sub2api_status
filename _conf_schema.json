@@ -12,24 +12,6 @@
     "hint": "填写以 admin- 开头的管理员 Key。该 Key 权限很高，只能保存在受信任的 AstrBot 服务端。",
     "obvious_hint": true
   },
-  "gift_enabled": {
-    "description": "启用QQ群@机器人赠送余额",
-    "type": "bool",
-    "default": false,
-    "hint": "默认关闭。启用前必须同时配置赠送额度和允许的QQ群号。"
-  },
-  "gift_amount": {
-    "description": "每次赠送余额",
-    "type": "float",
-    "default": 10,
-    "hint": "支持 0.01 到 1000。每个 QQ 用户和 Sub2API 账号只能领取一次。"
-  },
-  "gift_notes": {
-    "description": "余额流水备注",
-    "type": "string",
-    "default": "QQ群活动赠送余额",
-    "hint": "写入 Sub2API 官方余额流水。"
-  },
   "binding_service_url": {
     "description": "QQ 绑定服务地址",
     "type": "string",
@@ -43,17 +25,12 @@
     "hint": "与绑定 sidecar 的 QQ_BINDING_SERVICE_KEY 完全一致，仅保存在 AstrBot 服务端，不要发送到 QQ 或提交到仓库。",
     "obvious_hint": true
   },
-  "gift_allowed_group_ids": {
-    "description": "允许参与活动的QQ群号",
+  "QQ_CLAIM_SERVICE_KEY": {
+    "description": "QQ群领取服务密钥",
     "type": "string",
     "default": "",
-    "hint": "填写QQ群号，多个群用英文逗号、中文逗号或空格分隔。留空时活动不会响应。领取前必须完成 QQ 与自己的 Sub2API 账号绑定。"
-  },
-  "claim_registration_window_hours": {
-    "description": "领取要求：注册后多少小时内",
-    "type": "float",
-    "default": 0,
-    "hint": "0 表示不限制。设置为 24 表示仅允许注册后 24 小时内的 Sub2API 账号领取；以官方账号 created_at 为准。"
+    "hint": "与 sidecar 的 QQ_CLAIM_SERVICE_KEY 完全一致。配置后领取记录和余额查询由服务端统一管理，不再写入机器人本地领取数据库。",
+    "obvious_hint": true
   },
   "welcome_enabled": {
     "description": "启用新人入群欢迎",

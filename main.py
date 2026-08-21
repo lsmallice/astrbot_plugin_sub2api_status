@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from astrbot.api import AstrBotConfig, logger
@@ -13,12 +11,12 @@ from astrbot.api.message_components import At, Plain
 from astrbot.api.star import Context, Star
 
 from .claim import (
+    is_account_request,
     is_bot_mentioned,
     is_claim_request,
     parse_binding_confirmation_code,
     parse_group_ids,
 )
-from .claim_store import ClaimStore
 from .client import (
     BindingClient,
     BindingServiceError,
@@ -46,7 +44,6 @@ class Main(Star):
         self._fetch_lock = asyncio.Lock()
         self._cache: tuple[float, tuple[ChannelSnapshot, ...]] | None = None
         self._claim_lock = asyncio.Lock()
-        self._claim_store: ClaimStore | None = None
         self._welcome_lock = asyncio.Lock()
         self._welcome_seen: dict[tuple[str, str], float] = {}
 
@@ -56,27 +53,8 @@ class Main(Star):
             return value
         return str(value or "").strip().casefold() in {"1", "true", "yes", "on"}
 
-    def _gift_enabled(self) -> bool:
-        return self._as_bool(self.config.get("gift_enabled", False))
-
-    def _gift_amount(self) -> float | None:
-        try:
-            amount = float(self.config.get("gift_amount", 0))
-        except (TypeError, ValueError):
-            return None
-        if not 0.01 <= amount <= 1000:
-            return None
-        return amount
-
-    def _claim_registration_window_hours(self) -> float | None:
-        """Return the configured new-account window; zero means disabled."""
-        try:
-            hours = float(self.config.get("claim_registration_window_hours", 0))
-        except (TypeError, ValueError):
-            return None
-        if hours < 0 or hours > 87600:
-            return None
-        return hours
+    def _claim_service_key(self) -> str:
+        return str(self.config.get("QQ_CLAIM_SERVICE_KEY") or "").strip()
 
     def _welcome_enabled(self) -> bool:
         return self._as_bool(self.config.get("welcome_enabled", False))
@@ -98,23 +76,6 @@ class Main(Star):
             .replace("{mention}", "")
             .strip()
         )
-
-    def _claim_store_path(self) -> Path:
-        configured = str(self.config.get("claim_db_path") or "").strip()
-        if configured:
-            return Path(configured).expanduser()
-        try:
-            from astrbot.api.star import StarTools
-
-            return StarTools.get_data_dir() / "claims.sqlite3"
-        except Exception:
-            # Only used by isolated tests or an incomplete AstrBot bootstrap.
-            return Path(tempfile.gettempdir()) / "astrbot_sub2api_status_claims.sqlite3"
-
-    def _get_claim_store(self) -> ClaimStore:
-        if self._claim_store is None:
-            self._claim_store = ClaimStore(self._claim_store_path())
-        return self._claim_store
 
     @staticmethod
     def _claim_reply(event: AstrMessageEvent, text: str):
@@ -169,10 +130,10 @@ class Main(Star):
         except (TypeError, ValueError):
             return raw
 
-    async def _send_binding_link_privately(
+    async def _send_private_message(
         self, event: AstrMessageEvent, message: str
     ) -> bool:
-        """Send a binding challenge through the current platform's private session."""
+        """Send a sensitive reply through the current platform's private session."""
         sender_id = str(event.get_sender_id() or "").strip()
         platform_id_getter = getattr(event, "get_platform_id", None)
         if not sender_id or not callable(platform_id_getter):
@@ -188,8 +149,14 @@ class Main(Star):
             await send_message(private_session, MessageChain().message(message))
             return True
         except Exception:
-            logger.warning("QQ binding private message delivery failed")
+            logger.warning("QQ private message delivery failed")
             return False
+
+    async def _send_binding_link_privately(
+        self, event: AstrMessageEvent, message: str
+    ) -> bool:
+        """Send a binding challenge through the current platform's private session."""
+        return await self._send_private_message(event, message)
 
     @filter.command("绑定")
     async def create_qq_binding(self, event: AstrMessageEvent):
@@ -270,6 +237,97 @@ class Main(Star):
             f"当前 QQ 已绑定 Sub2API 用户 #{binding.id}。\n"
             "如需更换账号，请联系管理员处理，不能自行反复解绑重绑。"
         )
+
+    async def _account_reply(self, event: AstrMessageEvent, message: str):
+        """Keep account details out of group messages when private delivery works."""
+        group_getter = getattr(event, "get_group_id", None)
+        group_id = str(group_getter() or "").strip() if callable(group_getter) else ""
+        if not group_id:
+            yield self._claim_reply(event, message)
+            return
+        if await self._send_private_message(event, message):
+            yield self._claim_reply(event, "账户信息已私发，请在与机器人的私聊中查看。")
+            return
+        yield self._claim_reply(
+            event,
+            "账户信息仅支持私聊查询，请先私聊机器人发送任意消息后重试。",
+        )
+
+    async def _claim_account_reply(self, event: AstrMessageEvent, status_only: bool):
+        sender_id = str(event.get_sender_id() or "").strip()
+        if not sender_id:
+            yield self._claim_reply(event, "无法识别当前 QQ 用户，请稍后重试。")
+            return
+        claim_key = self._claim_service_key()
+        if not claim_key:
+            yield self._claim_reply(event, "领取服务暂未配置，请联系管理员。")
+            return
+        try:
+            account = await self._binding_client().claim_account(sender_id, claim_key)
+        except BindingServiceError:
+            logger.warning("QQ claim account lookup failed")
+            yield self._claim_reply(event, "余额和领取状态暂时无法读取，请稍后重试。")
+            return
+        if not account.bound:
+            yield self._claim_reply(
+                event, "当前 QQ 尚未绑定 Smallice AI 账号。\n请先发送 /绑定。"
+            )
+            return
+        claim = account.claim or {}
+        status_labels = {
+            "pending": "处理中",
+            "credited": "已领取",
+            "failed": "领取失败，可重试",
+        }
+        status = status_labels.get(str(claim.get("status") or ""), "未领取")
+        campaign = account.campaign or {}
+        amount = str(claim.get("amount") or campaign.get("amount") or "0")
+        created_at = self._format_binding_expiry(account.created_at)
+        account_status = {
+            "active": "正常",
+            "disabled": "已停用",
+            "banned": "已封禁",
+        }.get(str(account.status or "").casefold(), "未知")
+        if status_only:
+            async for result in self._account_reply(
+                event,
+                "领取状态\n"
+                f"状态：{status}\n活动额度：{amount}\n"
+                f"当前余额：{account.balance or '0'}\n"
+                f"账号状态：{account_status}\n注册时间：{created_at}\n"
+                "每个 QQ 用户和 Sub2API 账号仅可领取一次。",
+            ):
+                yield result
+            return
+        async for result in self._account_reply(
+            event,
+            f"Smallice AI 账户信息\n用户 ID：#{account.sub2api_user_id}\n"
+            f"当前余额：{account.balance or '0'}\n账号状态：{account_status}\n"
+            f"并发上限：{account.concurrency}\n注册时间：{created_at}\n"
+            f"领取状态：{status}\n本次活动额度：{amount}\n"
+            "如需领取，请在允许的群内 @机器人发送“领取”。",
+        ):
+            yield result
+
+    @filter.command("余额")
+    async def qq_balance(self, event: AstrMessageEvent):
+        async for result in self._claim_account_reply(event, False):
+            yield result
+
+    @filter.command("账户")
+    async def qq_account(self, event: AstrMessageEvent):
+        async for result in self._claim_account_reply(event, False):
+            yield result
+
+    @filter.command("我的余额")
+    async def qq_my_balance(self, event: AstrMessageEvent):
+        async for result in self._claim_account_reply(event, False):
+            yield result
+
+    @filter.command("领取状态")
+    async def qq_claim_status(self, event: AstrMessageEvent):
+        async for result in self._claim_account_reply(event, True):
+            yield result
 
     async def _snapshots(self) -> tuple[ChannelSnapshot, ...]:
         """Return cached monitor data or refresh it from Sub2API.
@@ -433,18 +491,18 @@ class Main(Star):
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def claim_balance(self, event: AstrMessageEvent):
         """Handle ``@bot 领取`` in an allowed QQ group after QQ binding."""
-        if not self._gift_enabled():
-            return
-
         group_id = str(event.get_group_id() or "").strip()
-        allowed_groups = parse_group_ids(self.config.get("gift_allowed_group_ids"))
-        # An empty allowlist is intentionally fail-closed. This avoids enabling
-        # a balance giveaway by merely installing or updating the plugin.
-        if not group_id or not allowed_groups or group_id not in allowed_groups:
+        if not group_id:
             return
 
         components = event.get_messages()
         if not is_bot_mentioned(components, event.get_self_id()):
+            return
+
+        if is_account_request(components, event.get_message_str()):
+            status_only = "领取状态" in event.get_message_str()
+            async for result in self._claim_account_reply(event, status_only):
+                yield result
             return
 
         if not is_claim_request(components, event.get_message_str()):
@@ -453,11 +511,6 @@ class Main(Star):
                 "请先发送 /绑定，将 QQ 与你自己的 Smallice AI 账号绑定。\n"
                 "绑定完成后，请 @机器人 发送“领取”。",
             )
-            return
-
-        amount = self._gift_amount()
-        if amount is None:
-            yield self._claim_reply(event, "领取活动暂未正确配置，请联系管理员。")
             return
 
         sender_id = str(event.get_sender_id() or "").strip()
@@ -470,44 +523,18 @@ class Main(Star):
         # the same idempotency key also protects retries after a process restart.
         async with self._claim_lock:
             try:
-                binding = await self._binding_client().lookup(sender_id)
-                if binding is None:
-                    yield self._claim_reply(
-                        event,
-                        "当前 QQ 尚未绑定 Sub2API 账号，请先发送 /绑定。",
-                    )
+                claim_key = self._claim_service_key()
+                if not claim_key:
+                    yield self._claim_reply(event, "领取服务暂未配置，请联系管理员。")
                     return
-                client = self._client()
-                registration_window_hours = self._claim_registration_window_hours()
-                if registration_window_hours is None:
-                    yield self._claim_reply(
-                        event,
-                        "领取活动暂未正确配置，请联系管理员。",
-                    )
-                    return
-                if registration_window_hours > 0:
-                    created_at = await client.fetch_user_created_at(binding.id)
-                    age_hours = (
-                        datetime.now(timezone.utc) - created_at
-                    ).total_seconds() / 3600
-                    if age_hours < -0.05:
-                        raise Sub2APIError("Sub2API 用户注册时间异常")
-                    if age_hours > registration_window_hours:
-                        yield self._claim_reply(
-                            event,
-                            "你的 Smallice AI 账号已超过本次活动的领取时间限制，"
-                            "无法领取。",
-                        )
-                        return
-                idempotency_key = f"astrbot-sub2api-gift-{sender_id}-{binding.id}"
-                reservation = await asyncio.to_thread(
-                    self._get_claim_store().reserve,
-                    qq_user_id=sender_id,
-                    sub2api_user_id=binding.id,
-                    amount=amount,
-                    idempotency_key=idempotency_key,
-                    created_at=datetime.now(timezone.utc).isoformat(),
+                binding_client = self._binding_client()
+                reservation = await binding_client.reserve_claim(
+                    sender_id, group_id, claim_key
                 )
+                claim = reservation.claim
+                claim_id = int(claim.get("id") or 0)
+                if claim_id <= 0:
+                    raise BindingServiceError("领取记录无效")
                 if not reservation.can_attempt:
                     yield self._claim_reply(
                         event,
@@ -515,35 +542,47 @@ class Main(Star):
                         "每个用户只能领取一次。",
                     )
                     return
-
-                notes = str(self.config.get("gift_notes") or "QQ群活动赠送余额").strip()
+                client = self._client()
+                user_id = int(claim.get("sub2api_user_id") or 0)
+                amount = float(str(claim.get("amount") or "0"))
+                idempotency_key = str(claim.get("idempotency_key") or "").strip()
+                if user_id <= 0 or amount <= 0 or not idempotency_key:
+                    raise BindingServiceError("领取记录信息不完整")
+                notes = reservation.notes or str(
+                    self.config.get("gift_notes") or "QQ群活动赠送余额"
+                ).strip()
                 try:
                     await client.add_balance(
-                        binding.id,
-                        reservation.record.amount,
+                        user_id,
+                        amount,
                         notes,
-                        reservation.record.idempotency_key,
+                        idempotency_key,
                     )
                 except Exception as exc:
-                    await asyncio.to_thread(
-                        self._get_claim_store().mark_failed,
-                        reservation.record.id,
-                        error_code=type(exc).__name__,
-                        error_message=str(exc),
+                    await binding_client.complete_claim(
+                        claim_id, "failed", claim_key,
+                        error_code=type(exc).__name__, error_message=str(exc),
                     )
                     raise
-
-                await asyncio.to_thread(
-                    self._get_claim_store().mark_credited,
-                    reservation.record.id,
-                    datetime.now(timezone.utc).isoformat(),
+                await binding_client.complete_claim(claim_id, "credited", claim_key)
+            except BindingServiceError as exc:
+                logger.warning(
+                    f"QQ claim service failed: {exc.code or type(exc).__name__}"
                 )
-            except BindingServiceError:
-                logger.warning("QQ binding lookup failed during claim")
-                yield self._claim_reply(
-                    event,
-                    "当前未能确认 QQ 绑定状态，请稍后重试。",
-                )
+                message = {
+                    "QQ_NOT_BOUND": "当前 QQ 尚未绑定 Sub2API 账号，请先发送 /绑定。",
+                    "CLAIM_DISABLED": "领取活动暂未开放，请稍后再试。",
+                    "GROUP_NOT_ALLOWED": "当前群不在领取活动范围内。",
+                    "REGISTRATION_WINDOW_EXPIRED": (
+                        "你的 Smallice AI 账号已超过本次活动的领取时间限制，无法领取。"
+                    ),
+                }.get(exc.code, "领取服务暂时不可用，请稍后重试。")
+                if exc.code in {"DUPLICATE_CLAIM", "CLAIM_ALREADY_CREDITED"}:
+                    message = (
+                        "该 QQ 用户或 Sub2API 账号已经领取过本活动，"
+                        "每个用户只能领取一次。"
+                    )
+                yield self._claim_reply(event, message)
                 return
             except (Sub2APIError, OSError, RuntimeError):
                 logger.warning(

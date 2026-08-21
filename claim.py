@@ -6,7 +6,18 @@ from collections.abc import Iterable
 from astrbot.api.message_components import At, Plain
 
 _EMAIL_RE = re.compile(r"^[^@]{1,80}@[^@]{1,190}$")
-_PREFIXES = {"领取", "赠送", "余额", "账号", "claim", "gift"}
+_CLAIM_PREFIXES = {"领取", "赠送", "claim", "gift"}
+_ACCOUNT_PREFIXES = {
+    "余额",
+    "账户",
+    "账号",
+    "我的余额",
+    "我的账户",
+    "领取状态",
+    "claim-status",
+    "account",
+}
+_COMMAND_PREFIXES = _CLAIM_PREFIXES | _ACCOUNT_PREFIXES
 
 
 def parse_group_ids(value: object) -> set[str]:
@@ -35,7 +46,21 @@ def is_claim_request(components: Iterable[object], fallback: str = "") -> bool:
     text = re.sub(r"\[At:?[^\]]*\]", " ", text, flags=re.IGNORECASE)
     tokens = [token.strip(" \t\r\n,，。.!！:：") for token in text.split()]
     tokens = [token for token in tokens if token]
-    return not tokens or len(tokens) == 1 and tokens[0].casefold() in _PREFIXES
+    return not tokens or len(tokens) == 1 and tokens[0].casefold() in _CLAIM_PREFIXES
+
+
+def is_account_request(components: Iterable[object], fallback: str = "") -> bool:
+    """Return whether a mention asks for the sender's own account details."""
+    plain_text = " ".join(
+        component.text.strip()
+        for component in components
+        if isinstance(component, Plain) and component.text.strip()
+    )
+    text = plain_text or fallback
+    text = re.sub(r"\[At:?[^\]]*\]", " ", text, flags=re.IGNORECASE)
+    tokens = [token.strip(" \t\r\n,，。.!！:：") for token in text.split()]
+    tokens = [token for token in tokens if token]
+    return len(tokens) == 1 and tokens[0].casefold() in _ACCOUNT_PREFIXES
 
 
 def parse_binding_confirmation_code(value: object) -> str | None:
@@ -60,7 +85,7 @@ def parse_account_identifier(
     text = re.sub(r"\[At:?[^\]]*\]", " ", text, flags=re.IGNORECASE)
     tokens = [token.strip(" \t\r\n,，。.!！:：") for token in text.split()]
     tokens = [token for token in tokens if token]
-    while tokens and tokens[0].casefold() in _PREFIXES:
+    while tokens and tokens[0].casefold() in _COMMAND_PREFIXES:
         tokens.pop(0)
     if len(tokens) != 1:
         return None

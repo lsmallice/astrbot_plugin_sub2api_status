@@ -24,6 +24,10 @@ class Sub2APIUserAmbiguous(Sub2APIError):
 class BindingServiceError(RuntimeError):
     """Raised when the QQ binding sidecar rejects or cannot process a request."""
 
+    def __init__(self, message: str, code: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+
 
 @dataclass(frozen=True)
 class ChannelSnapshot:
@@ -65,6 +69,25 @@ class BindingConfirmation:
     confirmation_code: str = ""
 
 
+@dataclass(frozen=True)
+class QQClaimAccount:
+    bound: bool
+    sub2api_user_id: int | None = None
+    balance: str = ""
+    status: str = ""
+    concurrency: int = 0
+    created_at: str = ""
+    claim: dict[str, Any] | None = None
+    campaign: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class QQClaimReservation:
+    claim: dict[str, Any]
+    can_attempt: bool
+    notes: str = ""
+
+
 def normalize_base_url(raw_url: str) -> str:
     """Validate and normalize a configured Sub2API base URL.
 
@@ -103,6 +126,11 @@ def admin_api_url(base_url: str, path: str) -> str:
 def binding_api_url(base_url: str, path: str) -> str:
     """Build an endpoint URL for the external QQ binding sidecar."""
     return f"{base_url.rstrip('/')}/api/binding/{path.lstrip('/')}"
+
+
+def claim_api_url(base_url: str, path: str) -> str:
+    """Build an endpoint URL for the guarded QQ claim API."""
+    return f"{base_url.rstrip('/')}/api/{path.lstrip('/')}"
 
 
 class Sub2APIClient:
@@ -505,14 +533,17 @@ class BindingClient:
         method: str = "GET",
         params: dict[str, Any] | None = None,
         body: dict[str, Any] | None = None,
+        service_header: str = "X-Binding-Service-Key",
+        service_key: str | None = None,
     ) -> dict[str, Any]:
-        if not self.service_key:
+        active_key = (service_key or self.service_key).strip()
+        if not active_key:
             raise BindingServiceError("尚未配置 QQ_BINDING_SERVICE_KEY")
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
         headers = {
             "Accept": "application/json",
             "User-Agent": "astrbot-plugin-sub2api-status/1.4.1",
-            "X-Binding-Service-Key": self.service_key,
+            service_header: active_key,
         }
         try:
             async with aiohttp.ClientSession(
@@ -539,7 +570,7 @@ class BindingClient:
             or payload.get("ok") is not True
         ):
             message = str(payload.get("message") or "QQ 绑定服务请求失败").strip()
-            raise BindingServiceError(message[:160])
+            raise BindingServiceError(message[:160], str(payload.get("code") or ""))
         data = payload.get("data")
         if not isinstance(data, dict):
             raise BindingServiceError("QQ 绑定服务响应缺少 data")
@@ -598,3 +629,76 @@ class BindingClient:
             sub2api_user_id=parsed_user_id,
             confirmation_code=str(data.get("confirmation_code") or "").strip(),
         )
+
+    async def claim_account(
+        self, qq_user_id: str, claim_service_key: str
+    ) -> QQClaimAccount:
+        data = await self._request_json(
+            claim_api_url(self.base_url, "bot/qq/account"),
+            params={"qq_user_id": qq_user_id.strip()},
+            service_header="X-QQ-Claim-Service-Key",
+            service_key=claim_service_key,
+        )
+        raw_user_id = data.get("sub2api_user_id")
+        try:
+            user_id = int(raw_user_id) if raw_user_id is not None else None
+        except (TypeError, ValueError) as exc:
+            raise BindingServiceError("QQ 领取服务返回的账号信息不完整") from exc
+        return QQClaimAccount(
+            bound=bool(data.get("bound")),
+            sub2api_user_id=user_id,
+            balance=str(data.get("balance") or ""),
+            status=str(data.get("status") or "").strip(),
+            concurrency=int(data.get("concurrency") or 0),
+            created_at=str(data.get("created_at") or ""),
+            claim=data.get("claim") if isinstance(data.get("claim"), dict) else None,
+            campaign=(
+                data.get("campaign")
+                if isinstance(data.get("campaign"), dict)
+                else None
+            ),
+        )
+
+    async def reserve_claim(
+        self, qq_user_id: str, group_id: str, claim_service_key: str
+    ) -> QQClaimReservation:
+        data = await self._request_json(
+            claim_api_url(self.base_url, "bot/qq/claims/reserve"),
+            method="POST",
+            body={"qq_user_id": qq_user_id.strip(), "group_id": group_id.strip()},
+            service_header="X-QQ-Claim-Service-Key",
+            service_key=claim_service_key,
+        )
+        claim = data.get("claim")
+        if not isinstance(claim, dict) or not claim.get("id"):
+            raise BindingServiceError("QQ 领取服务返回的领取记录不完整")
+        return QQClaimReservation(
+            claim=claim,
+            can_attempt=bool(data.get("can_attempt")),
+            notes=str(data.get("notes") or "").strip(),
+        )
+
+    async def complete_claim(
+        self,
+        claim_id: int,
+        status: str,
+        claim_service_key: str,
+        *,
+        error_code: str = "",
+        error_message: str = "",
+    ) -> dict[str, Any]:
+        data = await self._request_json(
+            claim_api_url(self.base_url, f"bot/qq/claims/{claim_id}/complete"),
+            method="POST",
+            body={
+                "status": status,
+                "error_code": error_code,
+                "error_message": error_message[:500],
+            },
+            service_header="X-QQ-Claim-Service-Key",
+            service_key=claim_service_key,
+        )
+        claim = data.get("claim")
+        if not isinstance(claim, dict):
+            raise BindingServiceError("QQ 领取服务返回的完成记录不完整")
+        return claim
