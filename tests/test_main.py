@@ -264,6 +264,7 @@ async def test_binding_link_is_sent_to_private_session(monkeypatch) -> None:
     session, chain = send_message.await_args.args
     assert session == "qq_official:FriendMessage:qq-openid"
     assert "secret-nonce" in chain.chain[0].text
+    assert "2026-08-21 20:00:00（北京时间）" in chain.chain[0].text
     assert "secret-nonce" not in results[0][1]
 
 

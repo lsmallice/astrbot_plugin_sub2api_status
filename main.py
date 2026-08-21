@@ -5,6 +5,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -152,6 +153,22 @@ class Main(Star):
         except ValueError as exc:
             raise BindingServiceError(str(exc)) from exc
 
+    @staticmethod
+    def _format_binding_expiry(value: str) -> str:
+        """Render the sidecar expiry timestamp for Chinese-speaking users."""
+        raw = str(value or "").strip()
+        if not raw:
+            return "未知"
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(ZoneInfo("Asia/Shanghai")).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+        except (TypeError, ValueError):
+            return raw
+
     async def _send_binding_link_privately(
         self, event: AstrMessageEvent, message: str
     ) -> bool:
@@ -190,7 +207,7 @@ class Main(Star):
         private_message = (
             "请打开下面的链接，并在 Smallice AI 主站登录后确认绑定：\n"
             f"{challenge.binding_url}\n"
-            f"链接有效期至：{challenge.expires_at}\n"
+            f"链接有效期至：{self._format_binding_expiry(challenge.expires_at)}（北京时间）\n"
             "该链接仅限你本人使用，请不要转发。"
         )
         if await self._send_binding_link_privately(event, private_message):
