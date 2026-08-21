@@ -1,0 +1,82 @@
+{
+  "base_url": {
+    "description": "Sub2API Base URL",
+    "type": "string",
+    "default": "https://smallice.xyz",
+    "hint": "填写 Sub2API 站点根地址，例如 https://smallice.xyz；不要填写渠道监控接口路径。"
+  },
+  "SUB2API_ADMIN_KEY": {
+    "description": "Sub2API 管理员 API Key",
+    "type": "string",
+    "default": "",
+    "hint": "填写以 admin- 开头的管理员 Key。该 Key 权限很高，只能保存在受信任的 AstrBot 服务端。",
+    "obvious_hint": true
+  },
+  "gift_enabled": {
+    "description": "启用QQ群@机器人赠送余额",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭。启用前必须同时配置赠送额度和允许的QQ群号。"
+  },
+  "gift_amount": {
+    "description": "每次赠送余额",
+    "type": "float",
+    "default": 10,
+    "hint": "支持 0.01 到 1000。每个 QQ 用户和 Sub2API 账号只能领取一次。"
+  },
+  "gift_notes": {
+    "description": "余额流水备注",
+    "type": "string",
+    "default": "QQ群活动赠送余额",
+    "hint": "写入 Sub2API 官方余额流水。"
+  },
+  "binding_service_url": {
+    "description": "QQ 绑定服务地址",
+    "type": "string",
+    "default": "https://smallice.xyz/tools/api/invite",
+    "hint": "默认使用 Smallice AI 的绑定服务；AstrBot 与 sidecar 在同一内网时也可以填写 sidecar 根地址，例如 http://127.0.0.1:8789。"
+  },
+  "QQ_BINDING_SERVICE_KEY": {
+    "description": "QQ 绑定服务密钥",
+    "type": "string",
+    "default": "",
+    "hint": "与绑定 sidecar 的 QQ_BINDING_SERVICE_KEY 完全一致，仅保存在 AstrBot 服务端，不要发送到 QQ 或提交到仓库。",
+    "obvious_hint": true
+  },
+  "gift_allowed_group_ids": {
+    "description": "允许参与活动的QQ群号",
+    "type": "string",
+    "default": "",
+    "hint": "填写QQ群号，多个群用英文逗号、中文逗号或空格分隔。留空时活动不会响应。领取前必须完成 QQ 与自己的 Sub2API 账号绑定。"
+  },
+  "claim_registration_window_hours": {
+    "description": "领取要求：注册后多少小时内",
+    "type": "float",
+    "default": 0,
+    "hint": "0 表示不限制。设置为 24 表示仅允许注册后 24 小时内的 Sub2API 账号领取；以官方账号 created_at 为准。"
+  },
+  "welcome_enabled": {
+    "description": "启用新人入群欢迎",
+    "type": "bool",
+    "default": false,
+    "hint": "仅处理 QQ OneBot 的 group_increase 通知；启用前请填写欢迎群号。"
+  },
+  "welcome_group_ids": {
+    "description": "新人欢迎群号",
+    "type": "string",
+    "default": "",
+    "hint": "填写需要自动欢迎的QQ群号，多个群用英文逗号、中文逗号或空格分隔。留空时不发送欢迎消息。"
+  },
+  "welcome_at_member": {
+    "description": "欢迎时@新成员",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后欢迎消息会使用 QQ 原生 At 消息组件@刚入群成员。"
+  },
+  "welcome_message": {
+    "description": "新人欢迎文案",
+    "type": "text",
+    "default": "欢迎加入本群！\n发送 /status 查询渠道状态，完成 QQ 绑定后可参与群内活动。",
+    "hint": "支持占位符 {qq} 和 {group_id}。@新成员由单独的消息组件发送，不需要在文案中手动输入。"
+  }
+}
