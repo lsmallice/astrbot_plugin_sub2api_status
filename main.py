@@ -152,9 +152,31 @@ class Main(Star):
         except ValueError as exc:
             raise BindingServiceError(str(exc)) from exc
 
+    async def _send_binding_link_privately(
+        self, event: AstrMessageEvent, message: str
+    ) -> bool:
+        """Send a binding challenge through the current platform's private session."""
+        sender_id = str(event.get_sender_id() or "").strip()
+        platform_id_getter = getattr(event, "get_platform_id", None)
+        if not sender_id or not callable(platform_id_getter):
+            return False
+        platform_id = str(platform_id_getter() or "").strip()
+        send_message = getattr(self.context, "send_message", None)
+        if not platform_id or not callable(send_message):
+            return False
+        try:
+            from astrbot.api.event import MessageChain
+
+            private_session = f"{platform_id}:FriendMessage:{sender_id}"
+            await send_message(private_session, MessageChain().message(message))
+            return True
+        except Exception:
+            logger.warning("QQ binding private message delivery failed")
+            return False
+
     @filter.command("绑定")
     async def create_qq_binding(self, event: AstrMessageEvent):
-        """Create a short-lived browser challenge for the current QQ user."""
+        """Create a short-lived browser challenge and deliver it privately."""
         sender_id = str(event.get_sender_id() or "").strip()
         if not sender_id:
             yield event.plain_result("无法识别当前 QQ 用户，请稍后重试。")
@@ -165,11 +187,21 @@ class Main(Star):
             logger.warning("QQ binding challenge creation failed")
             yield event.plain_result("绑定服务暂时不可用，请稍后重试或联系管理员。")
             return
-        yield event.plain_result(
+        private_message = (
             "请打开下面的链接，并在 Smallice AI 主站登录后确认绑定：\n"
             f"{challenge.binding_url}\n"
             f"链接有效期至：{challenge.expires_at}\n"
-            "请不要把链接转发给其他人。"
+            "该链接仅限你本人使用，请不要转发。"
+        )
+        if await self._send_binding_link_privately(event, private_message):
+            yield event.plain_result(
+                "绑定链接已私发，请在与机器人的私聊中查看。\n"
+                "为保护账号，链接不会显示在群聊中。"
+            )
+            return
+        yield event.plain_result(
+            "绑定链接未能私发。请先私聊机器人发送任意消息，\n"
+            "然后重新发送 /绑定；为保护账号，链接不会显示在群聊中。"
         )
 
     @filter.command("绑定确认")

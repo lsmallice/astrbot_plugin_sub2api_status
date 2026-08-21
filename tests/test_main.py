@@ -57,6 +57,16 @@ class FakePlain:
         self.text = text
 
 
+class FakeMessageChain:
+    def __init__(self) -> None:
+        self.chain: list[FakePlain] = []
+
+    def message(self, text: str) -> "FakeMessageChain":
+        self.chain.append(FakePlain(text))
+        return self
+
+
+setattr(sys.modules["astrbot.api.event"], "MessageChain", FakeMessageChain)
 message_components_module.At = FakeAt
 message_components_module.Plain = FakePlain
 star_module.Context = object
@@ -82,6 +92,17 @@ class FakeEvent:
 
     def chain_result(self, chain: list[object]) -> tuple[str, list[object]]:
         return "chain", chain
+
+
+class BindingEvent(FakeEvent):
+    def __init__(self, sender_id: str = "qq-openid") -> None:
+        self._sender_id = sender_id
+
+    def get_sender_id(self) -> str:
+        return self._sender_id
+
+    def get_platform_id(self) -> str:
+        return "qq_official"
 
 
 class ClaimEvent(FakeEvent):
@@ -220,6 +241,52 @@ async def test_claim_credits_once_and_stops_group_event(tmp_path, monkeypatch) -
     assert first_event.stopped
     assert second_event.stopped
     client.add_balance.assert_awaited_once()
+
+
+async def test_binding_link_is_sent_to_private_session(monkeypatch) -> None:
+    config = {
+        "binding_service_url": "http://binding.test",
+        "QQ_BINDING_SERVICE_KEY": "binding-test-key",
+    }
+    send_message = AsyncMock()
+    plugin = Main(SimpleNamespace(send_message=send_message), config)
+    challenge = SimpleNamespace(
+        binding_url="https://smallice.xyz/tools/qq-bind/secret-nonce",
+        expires_at="2026-08-21T12:00:00Z",
+    )
+    binding_client = SimpleNamespace(create_challenge=AsyncMock(return_value=challenge))
+    monkeypatch.setattr(plugin, "_binding_client", lambda: binding_client)
+
+    results = [result async for result in plugin.create_qq_binding(BindingEvent())]
+
+    assert "已私发" in results[0][1]
+    send_message.assert_awaited_once()
+    session, chain = send_message.await_args.args
+    assert session == "qq_official:FriendMessage:qq-openid"
+    assert "secret-nonce" in chain.chain[0].text
+    assert "secret-nonce" not in results[0][1]
+
+
+async def test_binding_link_is_never_leaked_when_private_delivery_fails(
+    monkeypatch,
+) -> None:
+    config = {
+        "binding_service_url": "http://binding.test",
+        "QQ_BINDING_SERVICE_KEY": "binding-test-key",
+    }
+    send_message = AsyncMock(side_effect=RuntimeError("private unavailable"))
+    plugin = Main(SimpleNamespace(send_message=send_message), config)
+    challenge = SimpleNamespace(
+        binding_url="https://smallice.xyz/tools/qq-bind/secret-nonce",
+        expires_at="2026-08-21T12:00:00Z",
+    )
+    binding_client = SimpleNamespace(create_challenge=AsyncMock(return_value=challenge))
+    monkeypatch.setattr(plugin, "_binding_client", lambda: binding_client)
+
+    results = [result async for result in plugin.create_qq_binding(BindingEvent())]
+
+    assert "未能私发" in results[0][1]
+    assert "secret-nonce" not in results[0][1]
 
 
 async def test_claim_requires_a_binding(monkeypatch, tmp_path) -> None:
