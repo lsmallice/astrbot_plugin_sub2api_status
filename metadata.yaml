@@ -3,6 +3,6 @@ display_name: Sub2API 渠道状态
 desc: 使用 /status 查询 Sub2API 渠道监控；支持新人入群欢迎和可配置条件的QQ群一次性余额领取。
 short_desc: 查询渠道状态，欢迎新人并支持配置条件的QQ群活动赠送余额。
 author: Smallice
-version: 1.4.0
+version: 1.4.1
 repo: https://github.com/lsmallice/astrbot_plugin_sub2api_status
 astrbot_version: ">=4.16,<5"

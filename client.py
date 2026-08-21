@@ -102,8 +102,6 @@ def admin_api_url(base_url: str, path: str) -> str:
 
 def binding_api_url(base_url: str, path: str) -> str:
     """Build an endpoint URL for the external QQ binding sidecar."""
-    if base_url.rstrip("/").endswith("/tools/api/invite"):
-        return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
     return f"{base_url.rstrip('/')}/api/binding/{path.lstrip('/')}"
 
 
@@ -198,7 +196,7 @@ class Sub2APIClient:
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
         headers = {
             "Accept": "application/json",
-            "User-Agent": "astrbot-plugin-sub2api-status/1.4.0",
+            "User-Agent": "astrbot-plugin-sub2api-status/1.4.1",
             "x-api-key": self.admin_key,
         }
         user_url = admin_api_url(self.base_url, f"admin/users/{user_id}")
@@ -239,7 +237,7 @@ class Sub2APIClient:
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
         headers = {
             "Accept": "application/json",
-            "User-Agent": "astrbot-plugin-sub2api-status/1.4.0",
+            "User-Agent": "astrbot-plugin-sub2api-status/1.4.1",
             "x-api-key": self.admin_key,
         }
         users_url = admin_api_url(self.base_url, "admin/users")
@@ -309,7 +307,7 @@ class Sub2APIClient:
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
         headers = {
             "Accept": "application/json",
-            "User-Agent": "astrbot-plugin-sub2api-status/1.4.0",
+            "User-Agent": "astrbot-plugin-sub2api-status/1.4.1",
             "x-api-key": self.admin_key,
         }
         balance_url = admin_api_url(self.base_url, f"admin/users/{user_id}/balance")
@@ -345,7 +343,7 @@ class Sub2APIClient:
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
         headers = {
             "Accept": "application/json",
-            "User-Agent": "astrbot-plugin-sub2api-status/1.4.0",
+            "User-Agent": "astrbot-plugin-sub2api-status/1.4.1",
             "x-api-key": self.admin_key,
         }
         list_url = admin_api_url(self.base_url, "admin/channel-monitors")
@@ -513,7 +511,7 @@ class BindingClient:
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
         headers = {
             "Accept": "application/json",
-            "User-Agent": "astrbot-plugin-sub2api-status/1.4.0",
+            "User-Agent": "astrbot-plugin-sub2api-status/1.4.1",
             "X-Binding-Service-Key": self.service_key,
         }
         try:

@@ -233,7 +233,7 @@ def test_normalizes_base_url_and_api_path() -> None:
     )
     assert (
         binding_api_url("https://smallice.xyz/tools/api/invite", "challenges")
-        == "https://smallice.xyz/tools/api/invite/challenges"
+        == "https://smallice.xyz/tools/api/invite/api/binding/challenges"
     )
     assert (
         binding_api_url("http://127.0.0.1:8789", "challenges")
